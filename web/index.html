@@ -39,17 +39,21 @@
 <script src="/static/xterm.js"></script>
 <script>
 const palette = __PALETTE__;
-const hex = n => "#" + palette[n];
-const term = new Terminal({
-  cols: 180, rows: 56, fontSize: 16, lineHeight: 1.0, letterSpacing: 0,
-  fontFamily: '"DejaVu Sans Mono", Menlo, Consolas, monospace',
-  cursorBlink: false, disableStdin: true, scrollback: 0, allowProposedApi: false,
-  theme: {
+// Panel theme -> xterm.js colors (the stream sends a "palette" event when the theme changes).
+function xtermTheme(p) {
+  const hex = n => "#" + p[n];
+  return {
     background: "#000000", foreground: hex(7), cursor: "#000000",
     black: hex(0), red: hex(1), green: hex(2), yellow: hex(3), blue: hex(4), magenta: hex(5), cyan: hex(6), white: hex(7),
     brightBlack: hex(8), brightRed: hex(9), brightGreen: hex(10), brightYellow: hex(11),
     brightBlue: hex(12), brightMagenta: hex(13), brightCyan: hex(14), brightWhite: hex(15),
-  },
+  };
+}
+const term = new Terminal({
+  cols: 180, rows: 56, fontSize: 16, lineHeight: 1.0, letterSpacing: 0,
+  fontFamily: '"DejaVu Sans Mono", Menlo, Consolas, monospace',
+  cursorBlink: false, disableStdin: true, scrollback: 0, allowProposedApi: false,
+  theme: xtermTheme(palette),
 });
 const wrap = document.getElementById("wrap");
 term.open(document.getElementById("term"));
@@ -69,6 +73,7 @@ function connect() {
   const es = new EventSource("/stream");
   es.addEventListener("size", e => { const d = JSON.parse(e.data); term.resize(d.cols, d.rows); setTimeout(fit, 50); });
   es.addEventListener("frame", e => term.write(JSON.parse(e.data)));
+  es.addEventListener("palette", e => { term.options.theme = xtermTheme(JSON.parse(e.data)); });
   es.onopen = () => { status.textContent = "● ao vivo"; status.className = "on"; };
   es.onerror = () => { status.textContent = "● reconectando…"; status.className = "off"; };
 }

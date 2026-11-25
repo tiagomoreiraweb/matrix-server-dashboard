@@ -23,12 +23,14 @@ import os
 import re
 import shutil
 import socket
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 import psutil
+
+from .runtime import ContainerRuntime, from_config
+from .shell import run_cmd
 
 # ------------------------------------------------------------------ helpers
 
@@ -38,15 +40,6 @@ def current_user() -> str:
         return getpass.getuser()
     except Exception:
         return os.environ.get("USER") or "operator"
-
-
-def _run(args: list[str], timeout: float = 4.0) -> tuple[int, str]:
-    try:
-        r = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                           text=True, timeout=timeout, check=False)
-        return r.returncode, r.stdout
-    except Exception:
-        return 1, ""
 
 
 def is_auto(value: Any) -> bool:
@@ -201,14 +194,15 @@ ON_STATES = {"enabled", "enabled-runtime", "alias", "generated", "indirect"}
 def _unit_states() -> tuple[dict[str, str], set[str]]:
     """Installed unit files with their enablement state, and the units running now."""
     files: dict[str, str] = {}
-    _, out = _run(["systemctl", "list-unit-files", "--type=service,socket", "--no-legend", "--no-pager"])
+    _, out = run_cmd(["systemctl", "list-unit-files", "--type=service,socket", "--no-legend", "--no-pager"],
+                     timeout=4.0, strip=False)
     for line in out.splitlines():
         f = line.split()
         if len(f) >= 2:
             files[f[0]] = f[1]
     active: set[str] = set()
-    _, out = _run(["systemctl", "list-units", "--type=service,socket", "--state=active", "--no-legend",
-                   "--no-pager", "--plain"])
+    _, out = run_cmd(["systemctl", "list-units", "--type=service,socket", "--state=active", "--no-legend",
+                      "--no-pager", "--plain"], timeout=4.0, strip=False)
     for line in out.splitlines():
         f = line.split()
         if f:
@@ -278,9 +272,6 @@ KNOWN_IMAGES: list[tuple[str, int, str | None, str]] = [
     ("mongo", 27017, None, "MONGODB"),
 ]
 
-PORT_MAP_RE = re.compile(r"(?:(\d+\.\d+\.\d+\.\d+|\[::\]|::):)?(\d+)->(\d+)/tcp")
-
-
 def _known(image: str) -> tuple[int, str | None, str] | None:
     img = image.lower().split("@")[0]
     for needle, port, path, label in KNOWN_IMAGES:
@@ -289,24 +280,12 @@ def _known(image: str) -> tuple[int, str | None, str] | None:
     return None
 
 
-def container_checks() -> list[dict[str, Any]]:
+def container_checks(runtimes: list[ContainerRuntime] | None = None) -> list[dict[str, Any]]:
     """One probe per running container: its published port, or the known default on host networking."""
-    code, out = _run(["docker", "ps", "--format", "{{.Names}}\t{{.Image}}\t{{.Ports}}\t{{.Networks}}"])
-    if code != 0:
-        return []
     checks = []
-    for line in out.splitlines():
-        parts = line.split("\t")
-        if len(parts) < 2:
-            continue
-        name, image = parts[0], parts[1]
-        ports_raw = parts[2] if len(parts) > 2 else ""
-        networks = parts[3] if len(parts) > 3 else ""
-        known = _known(image)
-        mapping: dict[int, tuple[str, int]] = {}
-        for host, hport, cport in PORT_MAP_RE.findall(ports_raw):
-            ip = "127.0.0.1" if host in ("", "0.0.0.0", "[::]", "::") else host
-            mapping.setdefault(int(cport), (ip, int(hport)))
+    for ep in (e for rt in (runtimes if runtimes is not None else from_config()) for e in rt.endpoints()):
+        name, mapping = ep.name, ep.ports
+        known = _known(ep.image)
         target: tuple[str, int] | None = None
         path: str | None = None
         label = name.upper().replace("_", " ").replace("-", " ")[:18]
@@ -315,7 +294,7 @@ def container_checks() -> list[dict[str, Any]]:
             label = klabel
             if kport in mapping:
                 target = mapping[kport]
-            elif networks == "host":
+            elif ep.host_network:
                 target = ("127.0.0.1", kport)
             elif mapping:  # app moved to another port: only check that it accepts connections
                 target, path = sorted(mapping.values(), key=lambda t: t[1])[0], None
@@ -365,11 +344,11 @@ def resolve(config: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
-def live_checks(config_checks: Any) -> list[dict[str, Any]]:
+def live_checks(config_checks: Any, runtimes: list[ContainerRuntime] | None = None) -> list[dict[str, Any]]:
     """Checks to probe now: explicit ones plus, with "auto", one per running container."""
     if not is_auto(config_checks):
         return list(config_checks or [])
-    return expand(config_checks, container_checks(),
+    return expand(config_checks, container_checks(runtimes),
                   key=lambda c: str(c.get("container") or c.get("name")))
 
 
@@ -379,10 +358,11 @@ def report(config: dict[str, Any]) -> str:
              f"interface   {config['network_interface']}",
              f"disks       {', '.join(config['mounts'])}",
              "services    " + (", ".join(f"{u['name']} ({u['unit']})" for u in config["systemd_units"]) or "-")]
-    checks = live_checks(config.get("checks"))
-    code, out = _run(["docker", "ps", "-a", "-q"])
-    docker = f"{len(out.split())} containers" if code == 0 else "not available (install Docker or add user to group docker)"
-    lines.append(f"docker      {docker}")
+    runtimes = from_config(config)
+    checks = live_checks(config.get("checks"), runtimes)
+    for rt in runtimes:
+        found = rt.containers()
+        lines.append(f"{rt.name:<11} " + (f"{len(found)} {rt.boot_unit}" if found is not None else rt.unavailable_hint))
     for c in checks:
         target = c.get("url") or f"tcp {c.get('tcp_host')}:{c.get('tcp_port')}"
         lines.append(f"  probe     {c['name']:<18} {target}")
@@ -397,8 +377,7 @@ def report(config: dict[str, Any]) -> str:
 
 
 if __name__ == "__main__":
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from matrix_dashboard import merge_config  # noqa: E402
+    from .config import merge_config
 
-    path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent / "config.json"
+    path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent / "config.json"
     print(report(merge_config(path)))

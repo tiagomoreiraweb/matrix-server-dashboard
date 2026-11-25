@@ -9,7 +9,7 @@ Para ver o resultado da detecção com a sua configuração: `./run.sh --detect`
 
 ## Detecção automática e o marcador `"auto"`
 
-Listas que contêm `"auto"` são preenchidas pelo [`autodetect.py`](../autodetect.py) a cada
+Listas que contêm `"auto"` são preenchidas pelo [`autodetect.py`](../matrixdash/autodetect.py) a cada
 início. Os itens que você escreve ao lado de `"auto"` são mantidos. Assim dá para acrescentar ou
 corrigir algo sem perder o resto:
 
@@ -65,7 +65,14 @@ MongoDB recebem teste TCP.
 | `network_interface` | `"auto"` | interface dos gráficos de rede |
 | `systemd_units` | `["auto"]` | serviços do host: `{"name": "RÓTULO", "unit": "nome-da-unit"}` |
 | `checks` | `["auto"]` | testes de endpoint, veja abaixo |
+| `alerts` | `{"delay": 2, "repeat": 60, ...}` | notificações dos alertas: canais `telegram`, `discord`, `ntfy`, `webhook`, minutos até avisar, lembrete e horário de silêncio ([Integrações](INTEGRACOES.md#alertas-telegram-discord-ntfy-webhook)) |
+| `theme` | `"matrix"` | tema de cores: `matrix`, `ambar`, `gelo`, `synthwave`, `mono` (também pelo menu `C`) |
+| `theme_colors` | `{}` | troca cores do tema, ex.: `{"accent": "ff00ff"}`; papéis: `g0`…`g6` (do mais escuro ao mais claro), `text`, `accent`, `red`, `amber`, `red_bg`, `white` |
 | `hide_containers` | `[]` | nomes de containers que não aparecem |
+| `runtimes` | `["auto"]` | de onde vêm os containers: `docker`, `k3s`; `auto` usa os que existirem na máquina |
+| `wireguard` | `{}` | `{"names": {"10.8.0.2": "casa"}}` dá nome aos peers; `false` esconde |
+| `argocd` | `"auto"` | applications do Argo CD lidas do cluster k3s; `false` esconde |
+| `kubeconfig` | `""` | kubeconfig usado para o k3s; vazio = procura (veja [Integrações](INTEGRACOES.md#k3s--kubernetes)) |
 | `ping_host` / `ping_host6` | `1.1.1.1` / `2606:4700:4700::1111` | alvo da latência e do teste de internet |
 | `thresholds` | `{"cpu": 85, "ram": 85, "disk": 90, "temperature": 80}` | limites de alerta (%, °C) |
 | `claude` | `"auto"` | `true`/`false` força mostrar/esconder o Claude Code |

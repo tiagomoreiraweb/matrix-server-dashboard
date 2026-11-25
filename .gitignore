@@ -7,5 +7,6 @@ config.json
 *.tmp
 .netmap.json
 .icloud_day.json
+.alerts.lock
 # personal portrait (keep yours out of the repo)
 assets/portrait.*

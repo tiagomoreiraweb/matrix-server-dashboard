@@ -41,7 +41,9 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
-WEB_DIR = Path(__file__).resolve().parent / "web"
+from . import ROOT
+
+WEB_DIR = ROOT / "web"
 STATIC = {
     "/static/xterm.js": ("xterm.js", "application/javascript"),
     "/static/xterm.css": ("xterm.css", "text/css"),
@@ -118,6 +120,7 @@ class WebMirror:
         self.fps = max(1, min(10, int(config.get("fps", 5))))
         self.screen_factory = screen_factory
         self.palette = palette
+        self.palette_id = 0
         self.title = title
         self.canvas = None
         self.frame_id = 0
@@ -130,6 +133,12 @@ class WebMirror:
         self.keys: deque[str] = deque(maxlen=32)
         self.shells: dict[str, Shell] = {}
         self.shell_lock = threading.Lock()
+
+    def palette_changed(self):
+        """The theme changed: open pages get the new colors and a full redraw."""
+        with self.cond:
+            self.palette_id += 1
+            self.cond.notify_all()
 
     def pop_keys(self) -> list[str]:
         out = []
@@ -310,19 +319,27 @@ class WebMirror:
                 self.end_headers()
                 screen = mirror.screen_factory()
                 seen, size = -1, None
+                palette_seen = mirror.palette_id
                 with mirror.cond:
                     mirror.clients += 1
                 try:
                     while True:
                         with mirror.cond:
-                            if mirror.frame_id == seen:
+                            if mirror.frame_id == seen and mirror.palette_id == palette_seen:
                                 mirror.cond.wait(timeout=15)
                             canvas, seen_now = mirror.canvas, mirror.frame_id
-                        if canvas is None or seen_now == seen:
+                        # A theme change recolors the page right away, even when the screen is still.
+                        recolor = mirror.palette_id != palette_seen
+                        if canvas is None or (seen_now == seen and not recolor):
                             self.wfile.write(b": keepalive\n\n")
                             self.wfile.flush()
                             continue
                         seen = seen_now
+                        if recolor:
+                            palette_seen = mirror.palette_id
+                            self.send_event("palette", mirror.palette)
+                            screen = mirror.screen_factory()
+                            size = None
                         if (canvas.w, canvas.h) != size:
                             size = (canvas.w, canvas.h)
                             screen.invalidate()

@@ -15,8 +15,13 @@ Docker e seus endpoints, rede, Tailscale e Claude Code.
 
 - **Zero configuração**: discos, ~35 serviços comuns, todos os containers e um teste HTTP/TCP para
   cada porta publicada. Container novo aparece sozinho.
+- **VPNs**: Tailscale e WireGuard com o estado de cada peer e alerta quando um túnel cai.
+- **k3s e Argo CD**: workloads do cluster junto com os containers do Docker e as Applications do
+  Argo CD com sync, health e o motivo de cada problema (tecla `A`).
 - **Telemetria ao vivo**: CPU total e por núcleo, RAM, swap, temperatura, carga, discos, rede
   (download/upload, IPv4/IPv6, latência) com gráficos.
+- **Alertas no celular**: Telegram, Discord, ntfy ou webhook, sem spam (só o que dura, um
+  aviso por problema, "resolvido" quando acaba).
 - **Console de eventos**: container caiu ou subiu, serviço parou, endpoint fora do ar, alerta de
   CPU/RAM/disco, dispositivo novo na rede.
 - **Mapa da rede** (`W`): dispositivos da LAN com nome e fabricante, peers do Tailscale e redes
@@ -27,6 +32,17 @@ Docker e seus endpoints, rede, Tailscale e Claude Code.
 - **Visual**: boot animado, chuva Matrix, retrato ASCII (sua foto ou o nome do servidor) com
   glitch e paleta verde no console.
 - Leve: Python puro (psutil + Pillow), coleta em threads e redesenho só do que mudou.
+
+### Temas de cores
+
+Escolha em **`C` → PAINEL → Tema de cores**: troca na hora, no terminal, no monitor (tty1) e
+na página web aberta.
+
+| MATRIX | ÂMBAR | GELO |
+|---|---|---|
+| ![matrix](docs/screenshots/temas/matrix.png) | ![âmbar](docs/screenshots/temas/ambar.png) | ![gelo](docs/screenshots/temas/gelo.png) |
+| **SYNTHWAVE** | **MONO** | |
+| ![synthwave](docs/screenshots/temas/synthwave.png) | ![mono](docs/screenshots/temas/mono.png) | |
 
 | Boot | Menu de configurações |
 |---|---|

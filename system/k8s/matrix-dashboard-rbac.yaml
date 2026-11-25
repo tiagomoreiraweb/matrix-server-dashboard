@@ -1,0 +1,52 @@
+# Read access to the cluster for the Matrix Server Dashboard, plus "rollout restart".
+# Apply once (or add to your GitOps repo), then create the kubeconfig with
+#   sudo ./system/k8s/make-kubeconfig.sh
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: matrix-dashboard
+  namespace: kube-system
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: matrix-dashboard-token
+  namespace: kube-system
+  annotations:
+    kubernetes.io/service-account.name: matrix-dashboard
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: matrix-dashboard
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "nodes", "namespaces", "services", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  # kubectl rollout restart = patch of the pod template annotation
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["patch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods", "nodes"]
+    verbs: ["get", "list"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: matrix-dashboard
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: matrix-dashboard
+subjects:
+  - kind: ServiceAccount
+    name: matrix-dashboard
+    namespace: kube-system

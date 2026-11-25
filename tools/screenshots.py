@@ -24,7 +24,10 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import matrix_dashboard as md  # noqa: E402
+from matrixdash import settings_menu, theme  # noqa: E402
+from matrixdash.dashboard import Dashboard  # noqa: E402
+from matrixdash.models import ClaudeInfo, Container, Event, Snapshot  # noqa: E402
+from matrixdash.render.canvas import Canvas  # noqa: E402
 
 HOST = "matrix-lab"
 USER = "admin"
@@ -61,13 +64,13 @@ UNITS = [("DOCKER ENGINE", "docker", "active"), ("SSH", "ssh", "active"), ("TAIL
          ("NGINX", "nginx", "active"), ("SAMBA", "smbd", "active"), ("FAIL2BAN", "fail2ban", "active"),
          ("CRON", "cron", "active")]
 EVENTS = [
-    ("SYSTEM", "matrix dashboard v3.0 online", md.G5),
-    ("SYSTEM", "watching 10 containers, 7 host units", md.G4),
-    ("DOCKER", "watchtower exited (0)", md.G4),
-    ("HTTP", "nextcloud endpoint back (200)", md.G5),
-    ("NET", "new device on the LAN: 192.168.1.73 (TV SALA)", md.AMBER),
-    ("PROBE", "disk /mnt/storage 61% used  1.4T free", md.G3),
-    ("CLAUDE", "session started (2 active)", md.CYAN),
+    ("SYSTEM", "matrix dashboard v3.0 online", theme.G5),
+    ("SYSTEM", "watching 10 containers, 7 host units", theme.G4),
+    ("DOCKER", "watchtower exited (0)", theme.G4),
+    ("HTTP", "nextcloud endpoint back (200)", theme.G5),
+    ("NET", "new device on the LAN: 192.168.1.73 (TV SALA)", theme.AMBER),
+    ("PROBE", "disk /mnt/storage 61% used  1.4T free", theme.G3),
+    ("CLAUDE", "session started (2 active)", theme.CYAN),
 ]
 
 
@@ -81,8 +84,8 @@ def wave(n: int, base: float, amp: float, seed: int) -> list[float]:
     return out
 
 
-def demo_snapshot() -> md.Snapshot:
-    s = md.Snapshot(hostname=HOST, kernel="6.8.0-48-generic", cores=8)
+def demo_snapshot() -> Snapshot:
+    s = Snapshot(hostname=HOST, kernel="6.8.0-48-generic", cores=8)
     s.per_core = [18, 31, 12, 44, 9, 22, 27, 15]
     s.cpu = sum(s.per_core) / len(s.per_core)
     s.ram, s.ram_used, s.ram_total = 42.0, int(13.4 * GIB), 32 * GIB
@@ -95,12 +98,12 @@ def demo_snapshot() -> md.Snapshot:
     s.lat4, s.lat6 = 12.0, 14.0
     s.latency = 12.0
     s.docker_ok = True
-    s.containers = [md.Container(name=n, state=st, health=h, age=a, exit_code="0" if st == "exited" else "",
+    s.containers = [Container(name=n, state=st, health=h, age=a, exit_code="0" if st == "exited" else "",
                                  image=img, ports=p, cpu=cpu, mem=mem)
                     for n, st, h, a, img, p, cpu, mem in CONTAINERS]
     s.units = list(UNITS)
     s.probes = dict(PROBES)
-    s.claude = md.ClaudeInfo(running=True, version="2.1.0", sessions=2, remote=HOST, procs=3, cpu=6.5,
+    s.claude = ClaudeInfo(running=True, version="2.1.0", sessions=2, remote=HOST, procs=3, cpu=6.5,
                              rss=640 << 20, since=time.time() - 5 * 3600, working=True)
     s.tailscale = {"state": "Running", "ip": "100.64.0.10", "online": True, "expiry_days": 120}
     s.cpu_hist = wave(300, 22, 18, 1)
@@ -115,13 +118,13 @@ def demo_snapshot() -> md.Snapshot:
 
 def palette() -> dict[int, tuple[tuple[int, int, int], tuple[int, int, int] | None]]:
     """style id -> (foreground, background) from the Linux console mapping."""
-    rgb = {n: tuple(int(h[i:i + 2], 16) for i in (0, 2, 4)) for n, h in md.LINUX_PALETTE.items()}
+    rgb = {n: tuple(int(h[i:i + 2], 16) for i in (0, 2, 4)) for n, h in theme.LINUX_PALETTE.items()}
 
     def slot(code: int) -> int:
         return code - 30 if code < 90 else code - 90 + 8
 
     out = {}
-    for style, sgr in md.SGR_LINUX.items():
+    for style, sgr in theme.SGR_LINUX.items():
         fg, bg = rgb[7], None
         for part in sgr.split(";"):
             c = int(part)
@@ -143,7 +146,7 @@ def find_font() -> str:
         sys.exit("precisa de uma fonte monoespaçada (apt install fonts-dejavu-core)")
 
 
-def paint(canvas: md.Canvas, path: Path, size: int = 16):
+def paint(canvas: Canvas, path: Path, size: int = 16):
     font = ImageFont.truetype(find_font(), size)
     cw = round(font.getlength("M"))
     asc, desc = font.getmetrics()
@@ -154,12 +157,12 @@ def paint(canvas: md.Canvas, path: Path, size: int = 16):
     colors = palette()
     for y in range(canvas.h):
         for x in range(canvas.w):
-            fg, bg = colors.get(canvas.styles[y][x], colors[md.G3])
+            fg, bg = colors.get(canvas.styles[y][x], colors[theme.G3])
             px, py = pad + x * cw, pad + y * ch
             if bg:
                 draw.rectangle([px, py, px + cw - 1, py + ch - 1], fill=bg)
             c = canvas.chars[y][x]
-            if c != " " and canvas.styles[y][x] != md.NONE:
+            if c != " " and canvas.styles[y][x] != theme.NONE:
                 draw.text((px, py), c, font=font, fill=fg)
     img.save(path, optimize=True)
     print(f"  {path.relative_to(ROOT) if path.is_relative_to(ROOT) else path}  {img.width}x{img.height}")
@@ -167,12 +170,12 @@ def paint(canvas: md.Canvas, path: Path, size: int = 16):
 
 # ------------------------------------------------------------------- scenes
 
-def make_dashboard(cols: int, rows: int) -> md.Dashboard:
+def make_dashboard(cols: int, rows: int) -> Dashboard:
     os.environ["COLUMNS"], os.environ["LINES"] = str(cols), str(rows)
     cfg = ROOT / "config.example.json"
-    md.read_ipv4 = lambda iface: dict(DEMO_NET)
-    md.NETCFG_HELPER = sys.executable  # any existing file: shows the editable network fields
-    d = md.Dashboard(cfg)
+    settings_menu.read_ipv4 = lambda iface: dict(DEMO_NET)
+    settings_menu.NETCFG_HELPER = sys.executable  # any existing file: shows the editable network fields
+    d = Dashboard(cfg)
     d.config["claude"] = True
     d.config["network_interface"] = "eth0"
     d.config["title"] = f"{HOST.upper()} // MATRIX SERVER MONITOR"
@@ -187,8 +190,8 @@ def make_dashboard(cols: int, rows: int) -> md.Dashboard:
     d.collector.events.clear()
     now_wall, now_mono = time.time(), time.monotonic()
     for i, (tag, text, style) in enumerate(EVENTS):
-        d.collector.events.append(md.Event(now_wall - (len(EVENTS) - i) * 47, now_mono - 60, tag, text, style))
-    d.build_boot_lines(snap)
+        d.collector.events.append(Event(now_wall - (len(EVENTS) - i) * 47, now_mono - 60, tag, text, style))
+    d.boot.build_lines(snap)
     random.seed(7)
     for _ in range(120):
         d.rain.resize(cols, rows)
@@ -201,8 +204,8 @@ def shot(name: str, cols: int, rows: int, out: Path, setup=None, at: float | Non
     if setup:
         setup(d)
     if at is not None and at < 0:  # negative = seconds before the end of the boot sequence
-        at = d.boot_duration() + at
-    t = at if at is not None else d.boot_duration() + 14.0
+        at = d.boot.duration() + at
+    t = at if at is not None else d.boot.duration() + 14.0
     canvas = d.render_canvas(t)
     paint(canvas, out / name)
 
@@ -217,6 +220,11 @@ def main():
     shot("settings.png", 160, 46, out, lambda d: d.menu.open())
     shot("medium.png", 130, 40, out)
     shot("compact.png", 92, 26, out)
+    # One preview per color theme (menu C -> PAINEL -> Tema).
+    (out / "temas").mkdir(exist_ok=True)
+    for name in theme.THEMES:
+        shot(f"temas/{name}.png", 150, 44, out, lambda d, name=name: d.set_theme(name))
+    theme.apply(theme.DEFAULT_THEME)
 
 
 if __name__ == "__main__":

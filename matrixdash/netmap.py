@@ -28,7 +28,6 @@ import re
 import shutil
 import socket
 import struct
-import subprocess
 import threading
 import time
 from collections import deque
@@ -36,22 +35,21 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from . import ROOT
+from .integrations import tailscale
+from .runtime import ContainerRuntime
+from .shell import run_cmd
+
 OUI_FILES = ("/usr/share/nmap/nmap-mac-prefixes", "/usr/share/ieee-data/oui.txt")
 WIFI_VENDORS = ("espressif", "tuya", "shelly", "itead", "sonoff", "amazon", "google", "ring ", "wyze",
                 "xiaomi", "beijing xiaomi", "realme", "oppo", "motorola", "huawei device", "vivo mobile",
                 "roku", "chromecast", "nintendo", "tp-link smart", "broadlink", "ezviz", "imou")
-STATE_FILE = Path(__file__).resolve().parent / ".netmap.json"
+STATE_FILE = ROOT / ".netmap.json"
 PORT_NAMES = {22: "ssh", 139: "samba", 445: "samba", 53: "dns", 80: "http", 443: "https", 8095: "painel",
               19999: "netdata", 5432: "postgres", 1883: "mqtt", 3389: "rdp", 5900: "vnc"}
 SS_RE = re.compile(r"^\d+\s+\d+\s+(\S+):(\d+)\s+(\S+):(\d+)")
 
 
-def _run(args: list[str], timeout: float = 5.0) -> tuple[int, str]:
-    try:
-        p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=timeout)
-        return p.returncode, p.stdout
-    except Exception:
-        return 1, ""
 
 
 def norm_mac(mac: str) -> str:
@@ -173,7 +171,7 @@ def rdns_name(ip: str) -> str:
 
 
 def ping_ms(ip: str, timeout: int = 1) -> float | None:
-    code, out = _run(["ping", "-n", "-c", "1", "-W", str(timeout), ip], timeout=timeout + 1.5)
+    code, out = run_cmd(["ping", "-n", "-c", "1", "-W", str(timeout), ip], timeout=timeout + 1.5, strip=False)
     if code != 0:
         return None
     m = re.search(r"time=([\d.]+)", out)
@@ -183,9 +181,10 @@ def ping_ms(ip: str, timeout: int = 1) -> float | None:
 # ---------------------------------------------------------------- mapper
 
 class NetMapper:
-    def __init__(self, config: dict[str, Any], iface: str, emit=None):
+    def __init__(self, config: dict[str, Any], iface: str, runtimes: list[ContainerRuntime] | None = None, emit=None):
         self.config = config
         self.iface = iface
+        self.runtimes = list(runtimes or [])
         self.emit = emit or (lambda *a, **k: None)
         self.oui = OuiDB()
         self.pool = ThreadPoolExecutor(max_workers=32)
@@ -220,7 +219,7 @@ class NetMapper:
         return {norm_mac(k): (v if isinstance(v, dict) else {"name": str(v)}) for k, v in raw.items()}
 
     def subnet(self) -> ipaddress.IPv4Network | None:
-        code, out = _run(["ip", "-4", "-o", "addr", "show", "dev", self.iface])
+        code, out = run_cmd(["ip", "-4", "-o", "addr", "show", "dev", self.iface], timeout=5.0, strip=False)
         m = re.search(r"inet (\d+\.\d+\.\d+\.\d+/\d+)", out)
         if not m:
             return None
@@ -234,12 +233,12 @@ class NetMapper:
         except OSError:
             pass
         wireless = Path(f"/sys/class/net/{self.iface}/wireless").exists()
-        _, out = _run(["ip", "-4", "-o", "addr", "show", "dev", self.iface])
+        _, out = run_cmd(["ip", "-4", "-o", "addr", "show", "dev", self.iface], timeout=5.0, strip=False)
         m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", out)
         return {"mac": mac, "ip": m.group(1) if m else "", "link": "wifi" if wireless else "cabo"}
 
     def gateway(self) -> str:
-        _, out = _run(["ip", "-4", "route", "show", "default"])
+        _, out = run_cmd(["ip", "-4", "route", "show", "default"], timeout=5.0, strip=False)
         m = re.search(r"via (\d+\.\d+\.\d+\.\d+)", out)
         return m.group(1) if m else ""
 
@@ -255,14 +254,14 @@ class NetMapper:
         finally:
             sock.close()
         if shutil.which("ping"):
-            _run(["ping", "-6", "-n", "-c", "2", "-w", "3", f"ff02::1%{self.iface}"], timeout=5)
+            run_cmd(["ping", "-6", "-n", "-c", "2", "-w", "3", f"ff02::1%{self.iface}"], timeout=5, strip=False)
         else:
             time.sleep(3)
 
     def neighbours(self) -> dict[str, dict[str, Any]]:
         devices: dict[str, dict[str, Any]] = {}
         for fam in ("-4", "-6"):
-            _, out = _run(["ip", fam, "neigh", "show", "dev", self.iface])
+            _, out = run_cmd(["ip", fam, "neigh", "show", "dev", self.iface], timeout=5.0, strip=False)
             for line in out.splitlines():
                 parts = line.split()
                 if "lladdr" not in parts or not parts:
@@ -388,9 +387,9 @@ class NetMapper:
         return {"subnet": str(net), "gateway": gw, "devices": devices}
 
     def tailscale(self) -> list[dict[str, Any]]:
-        if not shutil.which("tailscale"):
+        if not tailscale.installed():
             return []
-        code, out = _run(["tailscale", "status", "--json"], timeout=5)
+        code, out = tailscale.status(timeout=5)
         try:
             data = json.loads(out)
         except ValueError:
@@ -399,13 +398,7 @@ class NetMapper:
         for p in (data.get("Peer") or {}).values():
             ips = p.get("TailscaleIPs") or []
             dns = str(p.get("DNSName") or "").split(".")[0]
-            last = 0.0
-            ls = str(p.get("LastSeen") or "")
-            if ls and not ls.startswith("0001"):
-                try:
-                    last = time.mktime(time.strptime(ls[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
-                except ValueError:
-                    last = 0.0
+            last = tailscale.parse_time(str(p.get("LastSeen") or "")) or 0.0
             peers.append({
                 "name": dns or str(p.get("HostName") or "?"),
                 "ip": next((i for i in ips if "." in i), ips[0] if ips else ""),
@@ -419,35 +412,24 @@ class NetMapper:
         return peers
 
     def docker(self) -> list[dict[str, Any]]:
-        code, ids = _run(["docker", "network", "ls", "-q"])
-        if code != 0 or not ids.split():
-            return []
-        fmt = "{{.Name}}|{{.Driver}}|{{range .IPAM.Config}}{{.Subnet}} {{end}}|" \
-              "{{range $k,$v := .Containers}}{{$v.Name}}={{$v.IPv4Address}},{{end}}"
-        code, out = _run(["docker", "network", "inspect", *ids.split(), "--format", fmt], timeout=8)
-        nets = []
-        for line in out.splitlines():
-            parts = line.split("|")
-            if len(parts) < 4 or parts[1] == "null":
+        """Container networks of every runtime (the key keeps its old name for the snapshot export)."""
+        nets: list[dict[str, Any]] = []
+        pids: dict[str, int] = {}
+        got_pids = False
+        for rt in self.runtimes:
+            found = [{"name": n.name, "driver": n.driver, "subnet": n.subnet, "members": n.members}
+                     for n in rt.networks()]
+            if not found:
                 continue
-            members = []
-            for item in parts[3].split(","):
-                if "=" in item:
-                    name, ip = item.split("=", 1)
-                    members.append((name, ip.split("/")[0] if "." in ip else ""))
-            members.sort()
-            nets.append({"name": parts[0], "driver": parts[1], "subnet": parts[2].strip(), "members": members})
+            nets += found
+            # Container PIDs, to read their own network counters (host-network ones share the host's).
+            host_net = {m[0] for n in found if n["driver"] == "host" for m in n["members"]}
+            rt_pids = rt.pids(host_net)
+            if rt_pids is not None:
+                got_pids = True
+                pids.update(rt_pids)
         nets.sort(key=lambda n: (not n["members"], n["driver"] != "host", n["name"]))
-        # Container PIDs, to read their own network counters (host-network ones share the host's).
-        host_net = {m[0] for n in nets if n["driver"] == "host" for m in n["members"]}
-        code, out = _run(["docker", "ps", "-q"])
-        if code == 0 and out.split():
-            _, out = _run(["docker", "inspect", "-f", "{{.Name}} {{.State.Pid}}", *out.split()], timeout=6)
-            pids = {}
-            for line in out.splitlines():
-                name, _, pid = line.strip().lstrip("/").partition(" ")
-                if pid.isdigit() and int(pid) > 0 and name not in host_net:
-                    pids[name] = int(pid)
+        if got_pids:
             self.containers = pids
         return nets
 
@@ -499,7 +481,7 @@ class NetMapper:
             return peers.setdefault(ip, {"rx": 0.0, "tx": 0.0, "svc": set()})
 
         # Host sockets: rx/tx are from the device's point of view (rx = what the device receives).
-        _, out = _run(["ss", "-tinH", "state", "established"], timeout=4)
+        _, out = run_cmd(["ss", "-tinH", "state", "established"], timeout=4, strip=False)
         cur: dict[tuple, tuple[int, int]] = {}
         lines = out.splitlines()
         for i, line in enumerate(lines):

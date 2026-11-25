@@ -14,6 +14,6 @@ if [ -f /etc/systemd/system/matrix-dashboard.service ]; then
   systemctl daemon-reload
   echo "serviço removido"
 fi
-rm -f /etc/sudoers.d/matrix-dashboard /usr/local/sbin/matrix-netcfg
+rm -f /etc/sudoers.d/matrix-dashboard /etc/sudoers.d/matrix-dashboard-wireguard /usr/local/sbin/matrix-netcfg
 echo "regra do sudo e helper de rede removidos"
 echo "Se o console tty1 ficou sem login: sudo systemctl enable --now getty@tty1"
